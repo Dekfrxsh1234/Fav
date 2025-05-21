@@ -3,11 +3,13 @@ import aiosqlite
 import datetime
 import os
 
-DB_PATH = "data/games.db"
+DB_PATH = os.getenv("DB_PATH", "data/games.db")
 
 # ✅ สร้างตารางหากยังไม่มี
 async def setup_db():
-    os.makedirs("data", exist_ok=True)
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir: # This will be "data" for the default, or custom if DB_PATH is "custom/path/db.sqlite"
+        os.makedirs(db_dir, exist_ok=True)
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
@@ -34,7 +36,6 @@ async def setup_db():
 
 # ➕ เพิ่มผู้เล่นเข้าสู่คิว
 async def add_to_queue(user_id, username, guild_id, channel_id):
-    await setup_db()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT OR REPLACE INTO matchmaking_queue (user_id, username, guild_id, channel_id, timestamp)
@@ -59,7 +60,6 @@ async def is_in_game(user_id):
 
 # 🔍 ค้นหาคู่ที่ไม่ใช่ user นี้
 async def find_match(current_user_id):
-    await setup_db()
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
             SELECT user_id, username FROM matchmaking_queue
@@ -82,7 +82,6 @@ async def create_game(player1_id, player2_id):
     else:
         player_x, player_o = player2_id, player1_id
 
-    await setup_db()
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             INSERT INTO active_games (player_x_id, player_o_id, turn, board_state, status, start_time)
@@ -145,9 +144,12 @@ async def count_active_games():
 async def count_active_players():
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
-            SELECT COUNT(DISTINCT player_x_id || player_o_id)
-            FROM active_games
-            WHERE status = 'active'
+            SELECT COUNT(DISTINCT player_id)
+            FROM (
+                SELECT player_x_id AS player_id FROM active_games WHERE status = 'active'
+                UNION
+                SELECT player_o_id AS player_id FROM active_games WHERE status = 'active'
+            )
         """) as cursor:
             row = await cursor.fetchone()
             return row[0]
@@ -160,13 +162,3 @@ async def get_all_active_games():
             WHERE status = 'active'
         """) as cursor:
             return await cursor.fetchall()
-
-# ❌ หมดเวลาเกม
-async def expire_game(game_id):
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            UPDATE active_games
-            SET status = 'finished'
-            WHERE game_id = ?
-        """, (game_id,))
-        await db.commit()

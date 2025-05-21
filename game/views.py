@@ -5,6 +5,7 @@ from db.database import update_board, get_game_state, end_game
 from game.game_state import check_winner
 import asyncio
 from datetime import datetime, timedelta
+from config import GAME_TIMEOUT_MINUTES
 
 class XOGameView(View):
     def __init__(self, game_id: int, player_x: int, player_o: int, board: str, turn: str, start_time: str):
@@ -29,7 +30,7 @@ class XOGameView(View):
 
     def get_time_left(self):
         elapsed = datetime.utcnow() - self.start_time
-        remaining = max(timedelta(minutes=5) - elapsed, timedelta(seconds=0))
+        remaining = max(timedelta(minutes=GAME_TIMEOUT_MINUTES) - elapsed, timedelta(seconds=0))
         minutes, seconds = divmod(int(remaining.total_seconds()), 60)
         return f"{minutes} นาที {seconds} วินาที"
 

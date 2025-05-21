@@ -49,5 +49,4 @@ async def on_command_error(ctx, error):
     logging.exception("Command Error: %s", str(error))
 
 if __name__ == "__main__":
-    asyncio.run(setup_db())
     bot.run(TOKEN)
