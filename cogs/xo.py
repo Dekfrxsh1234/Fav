@@ -88,6 +88,7 @@ class XO(commands.Cog):
                     return
 
                 view = XOGameView(
+                    self.bot,
                     game_id=game_id,
                     player_x=state["player_x"],
                     player_o=state["player_o"],
