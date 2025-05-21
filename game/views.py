@@ -1,15 +1,16 @@
 import nextcord
 from nextcord.ui import View, Button
 from nextcord import ButtonStyle, Interaction
-from db.database import update_board, get_game_state, end_game
+from db.database import update_board, get_game_state, end_game, update_leaderboard # Added update_leaderboard
 from game.game_state import check_winner
 import asyncio
 from datetime import datetime, timedelta
 from config import GAME_TIMEOUT_MINUTES
 
 class XOGameView(View):
-    def __init__(self, game_id: int, player_x: int, player_o: int, board: str, turn: str, start_time: str):
+    def __init__(self, bot, game_id: int, player_x: int, player_o: int, board: str, turn: str, start_time: str): # Added bot
         super().__init__(timeout=None)
+        self.bot = bot # Store bot instance
         self.game_id = game_id
         self.player_x = player_x
         self.player_o = player_o
@@ -44,14 +45,25 @@ class XOGameView(View):
             await msg.edit(content=self.current_turn_display(), view=self)
 
     async def end_game_display(self, winner):
+        user_x = await self.bot.fetch_user(self.player_x)
+        user_o = await self.bot.fetch_user(self.player_o)
+        user_x_name = str(user_x) if user_x else str(self.player_x) # Fallback to ID if user not found
+        user_o_name = str(user_o) if user_o else str(self.player_o) # Fallback to ID if user not found
+
         if winner == 'X':
             result_msg = f"""🎉 <@{self.player_x}> ชนะ!
 😢 <@{self.player_o}> แพ้"""
+            await update_leaderboard(self.player_x, user_x_name, 'win')
+            await update_leaderboard(self.player_o, user_o_name, 'loss')
         elif winner == 'O':
             result_msg = f"""🎉 <@{self.player_o}> ชนะ!
 😢 <@{self.player_x}> แพ้"""
-        else:
+            await update_leaderboard(self.player_o, user_o_name, 'win')
+            await update_leaderboard(self.player_x, user_x_name, 'loss')
+        else: # Draw
             result_msg = "🤝 เกมเสมอ!"
+            await update_leaderboard(self.player_x, user_x_name, 'draw')
+            await update_leaderboard(self.player_o, user_o_name, 'draw')
 
         for item in self.children:
             item.disabled = True
@@ -64,9 +76,17 @@ class XOGameView(View):
         self.stop()
 
     async def expire_due_to_timeout(self):
+        user_x = await self.bot.fetch_user(self.player_x)
+        user_o = await self.bot.fetch_user(self.player_o)
+        user_x_name = str(user_x) if user_x else str(self.player_x) # Fallback to ID
+        user_o_name = str(user_o) if user_o else str(self.player_o) # Fallback to ID
+
+        await update_leaderboard(self.player_x, user_x_name, 'draw')
+        await update_leaderboard(self.player_o, user_o_name, 'draw')
+
         for item in self.children:
             item.disabled = True
-        await end_game(self.game_id)
+        await end_game(self.game_id) # Ensure game is marked as finished
         for msg in self.messages:
             await msg.edit(content="⏰ หมดเวลาแล้ว! เกมนี้ถือว่าเสมอ", view=self)
         self.stop()

@@ -4,7 +4,7 @@ from nextcord.ext import commands
 from nextcord import Interaction, slash_command, Embed
 from db.database import (
     add_to_queue, find_match, create_game, get_game_state,
-    is_in_queue, is_in_game
+    is_in_queue, is_in_game, get_leaderboard_data # Added get_leaderboard_data
 )
 from game.views import XOGameView
 from datetime import datetime
@@ -141,6 +141,41 @@ class XO(commands.Cog):
                 embed.set_footer(text=f"เข้าคิวเมื่อ: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
                 await interaction.followup.send(embed=embed, ephemeral=True)
         logger.info(f"User {user_id} released matchmaking_lock")
+
+    @slash_command(name="leaderboard", description="แสดงอันดับผู้เล่นเกม XO")
+    async def leaderboard(self, interaction: Interaction):
+        logger.info(f"START: /leaderboard called by {interaction.user} (ID: {interaction.user.id})")
+        await interaction.response.defer()
+
+        try:
+            leaderboard_entries = await get_leaderboard_data(top_n=10)
+
+            embed = Embed(title="🏆 XO Game Leaderboard (Top 10)", color=0x0099FF) # Blue color
+
+            if not leaderboard_entries:
+                embed.description = "ยังไม่มีข้อมูลใน leaderboard เลย เริ่มเล่นเกมเพื่อสร้างสถิติสิ! 🚀"
+            else:
+                description_lines = []
+                for rank, entry in enumerate(leaderboard_entries, start=1):
+                    user_id, username, wins, losses, draws = entry
+                    # Ensure username is not None and is a string
+                    username_display = str(username) if username else f"User ID: {user_id}"
+                    description_lines.append(
+                        f"**{rank}.** <@{user_id}> ({username_display})\n"
+                        f"   ชนะ: {wins} แพ้: {losses} เสมอ: {draws}"
+                    )
+                embed.description = "\n\n".join(description_lines)
+            
+            await interaction.followup.send(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error fetching leaderboard data: {e}", exc_info=True)
+            error_embed = Embed(
+                title="เกิดข้อผิดพลาด",
+                description="ไม่สามารถดึงข้อมูล leaderboard ได้ในขณะนี้ โปรดลองอีกครั้งภายหลัง",
+                color=0xFF0000 # Red color
+            )
+            await interaction.followup.send(embed=error_embed)
 
 
 def setup(bot):

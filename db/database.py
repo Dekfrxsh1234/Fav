@@ -32,6 +32,16 @@ async def setup_db():
             start_time TEXT
         )
         """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS leaderboard (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT NOT NULL,
+            wins INTEGER DEFAULT 0,
+            losses INTEGER DEFAULT 0,
+            draws INTEGER DEFAULT 0,
+            last_game_timestamp TEXT
+        )
+        """)
         await db.commit()
 
 # ➕ เพิ่มผู้เล่นเข้าสู่คิว
@@ -161,4 +171,54 @@ async def get_all_active_games():
             SELECT game_id, start_time FROM active_games
             WHERE status = 'active'
         """) as cursor:
+            return await cursor.fetchall()
+
+# 🏆 อัปเดตกระดานผู้นำ
+async def update_leaderboard(user_id, username, result):
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Attempt to insert a new player, or ignore if they already exist
+        await db.execute("""
+            INSERT OR IGNORE INTO leaderboard (user_id, username, wins, losses, draws, last_game_timestamp)
+            VALUES (?, ?, 0, 0, 0, ?)
+        """, (user_id, username, datetime.datetime.utcnow().isoformat()))
+
+        # Update scores based on the result
+        if result == 'win':
+            await db.execute("""
+                UPDATE leaderboard
+                SET wins = wins + 1, username = ?, last_game_timestamp = ?
+                WHERE user_id = ?
+            """, (username, datetime.datetime.utcnow().isoformat(), user_id))
+        elif result == 'loss':
+            await db.execute("""
+                UPDATE leaderboard
+                SET losses = losses + 1, username = ?, last_game_timestamp = ?
+                WHERE user_id = ?
+            """, (username, datetime.datetime.utcnow().isoformat(), user_id))
+        elif result == 'draw':
+            await db.execute("""
+                UPDATE leaderboard
+                SET draws = draws + 1, username = ?, last_game_timestamp = ?
+                WHERE user_id = ?
+            """, (username, datetime.datetime.utcnow().isoformat(), user_id))
+        await db.commit()
+
+# 🏅 ดึงข้อมูลกระดานผู้นำ
+async def get_leaderboard_data(top_n=10, sort_by='wins'):
+    async with aiosqlite.connect(DB_PATH) as db:
+        # For now, only sorting by wins is implemented.
+        # Could extend sort_by to include 'win_rate', 'losses', 'draws' etc. in the future.
+        if sort_by != 'wins':
+            # Potentially raise an error or default to 'wins'
+            sort_by_clause = "wins DESC" # Default to wins if an unsupported sort_by is given
+        else:
+            sort_by_clause = "wins DESC"
+
+        query = f"""
+            SELECT user_id, username, wins, losses, draws
+            FROM leaderboard
+            ORDER BY {sort_by_clause}
+            LIMIT ?
+        """
+        async with db.execute(query, (top_n,)) as cursor:
             return await cursor.fetchall()
