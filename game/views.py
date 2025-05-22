@@ -1,14 +1,14 @@
 import nextcord
 from nextcord.ui import View, Button
 from nextcord import ButtonStyle, Interaction
-from db.database import update_board, get_game_state, end_game, update_leaderboard # Added update_leaderboard
+from db.database import update_board, get_game_state, end_game, update_leaderboard, calculate_and_update_elo # Added calculate_and_update_elo
 from game.game_state import check_winner
 import asyncio
 from datetime import datetime, timedelta
 from config import GAME_TIMEOUT_MINUTES
 
 class XOGameView(View):
-    def __init__(self, bot, game_id: int, player_x: int, player_o: int, board: str, turn: str, start_time: str): # Added bot
+    def __init__(self, bot, game_id: int, player_x: int, player_o: int, board: str, turn: str, start_time: str, game_mode: str): # Added game_mode
         super().__init__(timeout=None)
         self.bot = bot # Store bot instance
         self.game_id = game_id
@@ -17,6 +17,7 @@ class XOGameView(View):
         self.board = list(board)
         self.turn = turn
         self.start_time = datetime.fromisoformat(start_time)
+        self.game_mode = game_mode # Store game_mode
         self.lock = asyncio.Lock()
         self.messages = []
         self.build_buttons()
@@ -64,6 +65,15 @@ class XOGameView(View):
             result_msg = "🤝 เกมเสมอ!"
             await update_leaderboard(self.player_x, user_x_name, 'draw')
             await update_leaderboard(self.player_o, user_o_name, 'draw')
+            game_result_for_elo = 'draw'
+
+        if self.game_mode == "ranked":
+            if winner == 'X':
+                game_result_for_elo = self.player_x
+            elif winner == 'O':
+                game_result_for_elo = self.player_o
+            # else, it's already 'draw' from above
+            await calculate_and_update_elo(self.player_x, self.player_o, game_result_for_elo)
 
         for item in self.children:
             item.disabled = True
@@ -83,6 +93,9 @@ class XOGameView(View):
 
         await update_leaderboard(self.player_x, user_x_name, 'draw')
         await update_leaderboard(self.player_o, user_o_name, 'draw')
+
+        if self.game_mode == "ranked":
+            await calculate_and_update_elo(self.player_x, self.player_o, 'draw')
 
         for item in self.children:
             item.disabled = True

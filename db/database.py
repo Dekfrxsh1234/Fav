@@ -2,6 +2,7 @@
 import aiosqlite
 import datetime
 import os
+import math
 
 DB_PATH = os.getenv("DB_PATH", "data/games.db")
 
@@ -29,7 +30,8 @@ async def setup_db():
             turn TEXT,
             board_state TEXT,
             status TEXT,
-            start_time TEXT
+            start_time TEXT,
+            game_mode TEXT
         )
         """)
         await db.execute("""
@@ -39,6 +41,7 @@ async def setup_db():
             wins INTEGER DEFAULT 0,
             losses INTEGER DEFAULT 0,
             draws INTEGER DEFAULT 0,
+            elo INTEGER DEFAULT 1000,
             last_game_timestamp TEXT
         )
         """)
@@ -85,7 +88,7 @@ async def find_match(current_user_id):
     return None
 
 # 🎮 สร้างเกมใหม่
-async def create_game(player1_id, player2_id):
+async def create_game(player1_id, player2_id, game_mode): # Added game_mode
     import random
     if random.choice([True, False]):
         player_x, player_o = player1_id, player2_id
@@ -94,9 +97,9 @@ async def create_game(player1_id, player2_id):
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
-            INSERT INTO active_games (player_x_id, player_o_id, turn, board_state, status, start_time)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (player_x, player_o, 'X', '---------', 'active', datetime.datetime.utcnow().isoformat()))
+            INSERT INTO active_games (player_x_id, player_o_id, turn, board_state, status, start_time, game_mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (player_x, player_o, 'X', '---------', 'active', datetime.datetime.utcnow().isoformat(), game_mode)) # Added game_mode
         await db.commit()
 
         cursor = await db.execute("SELECT last_insert_rowid()")
@@ -117,10 +120,10 @@ async def update_board(game_id, new_board, next_turn):
 async def get_game_state(game_id):
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute("""
-            SELECT player_x_id, player_o_id, board_state, turn, status, start_time
+            SELECT player_x_id, player_o_id, board_state, turn, status, start_time, game_mode
             FROM active_games
             WHERE game_id = ?
-        """, (game_id,)) as cursor:
+        """, (game_id,)) as cursor: # Added game_mode to SELECT
             row = await cursor.fetchone()
             if row:
                 return {
@@ -129,7 +132,8 @@ async def get_game_state(game_id):
                     "board": row[2],
                     "turn": row[3],
                     "status": row[4],
-                    "start_time": row[5]
+                    "start_time": row[5],
+                    "game_mode": row[6] # Added game_mode to return dict
                 }
     return None
 
@@ -204,21 +208,94 @@ async def update_leaderboard(user_id, username, result):
         await db.commit()
 
 # 🏅 ดึงข้อมูลกระดานผู้นำ
-async def get_leaderboard_data(top_n=10, sort_by='wins'):
+async def get_leaderboard_data(top_n=10): # Removed sort_by parameter
     async with aiosqlite.connect(DB_PATH) as db:
-        # For now, only sorting by wins is implemented.
-        # Could extend sort_by to include 'win_rate', 'losses', 'draws' etc. in the future.
-        if sort_by != 'wins':
-            # Potentially raise an error or default to 'wins'
-            sort_by_clause = "wins DESC" # Default to wins if an unsupported sort_by is given
-        else:
-            sort_by_clause = "wins DESC"
-
-        query = f"""
-            SELECT user_id, username, wins, losses, draws
+        query = """
+            SELECT user_id, username, wins, losses, draws, elo
             FROM leaderboard
-            ORDER BY {sort_by_clause}
+            ORDER BY elo DESC
             LIMIT ?
-        """
+        """ # Updated query to sort by elo and select elo
         async with db.execute(query, (top_n,)) as cursor:
             return await cursor.fetchall()
+
+# 👤 ดึงข้อมูลโปรไฟล์ผู้เล่น
+async def get_profile_data(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("""
+            SELECT username, wins, losses, draws, elo
+            FROM leaderboard
+            WHERE user_id = ?
+        """, (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return {
+                    "username": row[0],
+                    "wins": row[1],
+                    "losses": row[2],
+                    "draws": row[3],
+                    "elo": row[4]
+                }
+            else:
+                return None # User not found in leaderboard
+
+# 🎯 ดึง ELO ของผู้เล่น
+async def get_player_elo(user_id):
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT elo FROM leaderboard WHERE user_id = ?", (user_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                return row[0]
+            else:
+                # Player not found, return default ELO.
+                # This assumes update_leaderboard has been called at least once for the user,
+                # or they are new and will get the default ELO set in the table schema.
+                # If a user somehow has no entry, they start at 1000.
+                return 1000
+
+# 🔄 อัปเดต ELO ของผู้เล่น
+async def update_player_elo(user_id, new_elo):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE leaderboard
+            SET elo = ?
+            WHERE user_id = ?
+        """, (new_elo, user_id))
+        await db.commit()
+
+# 🧮 คำนวณและอัปเดต ELO หลังจบเกม
+async def calculate_and_update_elo(player1_id, player2_id, game_result):
+    """
+    Calculates and updates ELO ratings for two players based on a game result.
+
+    Args:
+        player1_id: The user ID of the first player.
+        player2_id: The user ID of the second player.
+        game_result: Can be player1_id (if player1 wins), player2_id (if player2 wins),
+                     or the string 'draw'.
+    """
+    elo1 = await get_player_elo(player1_id)
+    elo2 = await get_player_elo(player2_id)
+
+    K = 32  # K-factor
+
+    if game_result == player1_id:
+        s1, s2 = 1, 0  # Player 1 wins
+    elif game_result == player2_id:
+        s1, s2 = 0, 1  # Player 2 wins
+    elif game_result == 'draw':
+        s1, s2 = 0.5, 0.5  # Draw
+    else:
+        # Should not happen with current usage in command_handler
+        raise ValueError("Invalid game_result. Must be player1_id, player2_id, or 'draw'.")
+
+    # Expected scores
+    e1 = 1 / (1 + math.pow(10, (elo2 - elo1) / 400))
+    e2 = 1 / (1 + math.pow(10, (elo1 - elo2) / 400))
+
+    # New ELO ratings
+    new_elo1 = round(elo1 + K * (s1 - e1))
+    new_elo2 = round(elo2 + K * (s2 - e2))
+
+    await update_player_elo(player1_id, new_elo1)
+    await update_player_elo(player2_id, new_elo2)

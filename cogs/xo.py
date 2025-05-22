@@ -1,10 +1,11 @@
 import logging
 import asyncio # Added asyncio
+import nextcord # Added nextcord for Color and User
 from nextcord.ext import commands
-from nextcord import Interaction, slash_command, Embed
+from nextcord import Interaction, slash_command, Embed, SlashOption # Added SlashOption
 from db.database import (
     add_to_queue, find_match, create_game, get_game_state,
-    is_in_queue, is_in_game, get_leaderboard_data # Added get_leaderboard_data
+    is_in_queue, is_in_game, get_leaderboard_data, get_profile_data # Added get_profile_data
 )
 from game.views import XOGameView
 from datetime import datetime
@@ -17,8 +18,14 @@ class XO(commands.Cog):
         self.matchmaking_lock = asyncio.Lock() # Initialize lock
 
     @slash_command(name="xomatch", description="เข้าคิวเพื่อเล่นเกม XO")
-    async def xomatch(self, interaction: Interaction):
-        logger.info(f"START: /xomatch called by {interaction.user} (ID: {interaction.user.id})")
+    async def xomatch(self, interaction: Interaction,
+                       game_mode: str = SlashOption(
+                           name="game_mode",
+                           description="Choose the game mode",
+                           required=True,
+                           choices={"Casual": "casual", "Ranked": "ranked"}
+                       )):
+        logger.info(f"START: /xomatch called by {interaction.user} (ID: {interaction.user.id}) with game_mode: {game_mode}") # Added game_mode to log
         await interaction.response.defer(ephemeral=True)
 
         user = interaction.user
@@ -73,8 +80,9 @@ class XO(commands.Cog):
             opponent = await find_match(user_id)
             if opponent:
                 logger.info(f"Found opponent: {opponent} for user: {user_id} (inside lock)")
-                game_id, _ = await create_game(user_id, opponent)
-                logger.info(f"Game created: {game_id} for users {user_id} and {opponent} (inside lock)")
+                # Pass game_mode to create_game
+                game_id, _ = await create_game(user_id, opponent, game_mode)
+                logger.info(f"Game created: {game_id} for users {user_id} and {opponent} with mode {game_mode} (inside lock)") # Added game_mode to log
 
                 state = await get_game_state(game_id)
                 if not state:
@@ -94,7 +102,8 @@ class XO(commands.Cog):
                     player_o=state["player_o"],
                     board=state["board"],
                     turn=state["turn"],
-                    start_time=state["start_time"]
+                    start_time=state["start_time"],
+                    game_mode=state["game_mode"] # Added game_mode
                 )
 
                 try:
@@ -149,20 +158,20 @@ class XO(commands.Cog):
         await interaction.response.defer()
 
         try:
-            leaderboard_entries = await get_leaderboard_data(top_n=10)
+            leaderboard_entries = await get_leaderboard_data(top_n=10) # This now returns elo
 
-            embed = Embed(title="🏆 XO Game Leaderboard (Top 10)", color=0x0099FF) # Blue color
+            embed = Embed(title="🏆 XO Game Leaderboard (Top 10 by ELO)", color=nextcord.Color.gold()) # Updated title and color
 
             if not leaderboard_entries:
                 embed.description = "ยังไม่มีข้อมูลใน leaderboard เลย เริ่มเล่นเกมเพื่อสร้างสถิติสิ! 🚀"
             else:
                 description_lines = []
                 for rank, entry in enumerate(leaderboard_entries, start=1):
-                    user_id, username, wins, losses, draws = entry
+                    user_id, username, wins, losses, draws, elo = entry # Unpack elo
                     # Ensure username is not None and is a string
                     username_display = str(username) if username else f"User ID: {user_id}"
                     description_lines.append(
-                        f"**{rank}.** <@{user_id}> ({username_display})\n"
+                        f"**{rank}.** <@{user_id}> ({username_display}) - **ELO: {elo}**\n" # Added ELO display
                         f"   ชนะ: {wins} แพ้: {losses} เสมอ: {draws}"
                     )
                 embed.description = "\n\n".join(description_lines)
@@ -177,6 +186,50 @@ class XO(commands.Cog):
                 color=0xFF0000 # Red color
             )
             await interaction.followup.send(embed=error_embed)
+
+    @slash_command(name="profile", description="แสดงสถิติเกม XO ของผู้เล่น")
+    async def profile(self, interaction: Interaction,
+                      user: nextcord.User = SlashOption(
+                          name="user",
+                          description="ผู้เล่นที่ต้องการดูโปรไฟล์ (ปล่อยว่างเพื่อดูของตัวเอง)",
+                          required=False,
+                          default=None
+                      )):
+        logger.info(f"START: /profile called by {interaction.user} (ID: {interaction.user.id}) for user: {user}")
+        await interaction.response.defer()
+
+        target_user = user if user else interaction.user
+
+        profile_data = await get_profile_data(target_user.id)
+
+        if profile_data is None:
+            embed = Embed(
+                title="ไม่มีข้อมูลสถิติ",
+                description=f"<@{target_user.id}> ยังไม่มีสถิติการเล่นเกม XO หรือยังไม่ได้เล่นเกมแรก",
+                color=nextcord.Color.orange()
+            )
+        else:
+            embed = Embed(
+                title=f"📊 โปรไฟล์ XO ของ {target_user.display_name}",
+                color=nextcord.Color.blue()
+            )
+            embed.set_thumbnail(url=target_user.display_avatar.url)
+            embed.add_field(name="ELO Rating", value=profile_data['elo'], inline=True)
+            embed.add_field(name="Wins", value=profile_data['wins'], inline=True)
+            embed.add_field(name="Losses", value=profile_data['losses'], inline=True)
+            embed.add_field(name="Draws", value=profile_data['draws'], inline=True)
+            
+            total_games = profile_data['wins'] + profile_data['losses'] + profile_data['draws']
+            embed.add_field(name="Total Games", value=total_games, inline=False)
+
+            if total_games > 0:
+                win_rate = (profile_data['wins'] / total_games) * 100
+                embed.add_field(name="Win Rate", value=f"{win_rate:.2f}%", inline=False)
+            else:
+                embed.add_field(name="Win Rate", value="N/A", inline=False)
+
+
+        await interaction.followup.send(embed=embed)
 
 
 def setup(bot):
