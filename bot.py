@@ -1,7 +1,6 @@
 import nextcord
 from nextcord.ext import commands
 import logging
-import asyncio
 import os
 from db.database import setup_db
 from dotenv import load_dotenv
@@ -10,7 +9,12 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
 # Logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", filename="bot.log", filemode="a")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    filename="bot.log",
+    filemode="a",
+)
 
 # Intents
 intents = nextcord.Intents.default()
@@ -21,6 +25,7 @@ intents.message_content = True
 
 # Bot setup
 bot = commands.AutoShardedBot(command_prefix="!", intents=intents)
+
 
 @bot.event
 async def on_ready():
@@ -43,10 +48,12 @@ async def on_ready():
     except Exception as e:
         print(f"❌ Failed to sync commands: {e}")
 
+
 @bot.event
 async def on_command_error(ctx, error):
     await ctx.send(f"❗ เกิดข้อผิดพลาด: {error}")
     logging.exception("Command Error: %s", str(error))
+
 
 if __name__ == "__main__":
     bot.run(TOKEN)
